@@ -76,3 +76,41 @@ def test_generate_keeps_shape(t, tmp_path, req):
     ys = [z[1] for i, s in enumerate(out) if inside(base[i][0]) and inside(base[i][1]) for z in s]
     assert abs(max(xs) - min(xs) - vals["L"]) < 1e-3
     assert abs(max(ys) - min(ys) - vals["H"]) < 1e-3
+
+
+def test_generate_keeps_annotations(t, tmp_path):
+    """Đoạn Φd2 bị nén mạnh (No.25 L=60): gạch mặt cắt vẫn 45°, vòng tròn chi tiết B vẫn tròn,
+    chữ thông số không đè nhau."""
+    import math
+
+    import numpy as np
+
+    from pdf2cad.template import _fit_circle, _overlap, _text_box, generate
+    v = t.spec["view"]
+    b, ay = v["box"], v["axis_y"]
+    vals, _, err = resolve_params(t, {"No": 25, "L": 60})
+    assert not err
+    msp = ezdxf.readfile(generate(t, vals, tmp_path / "x.dxf")["output"]).modelspace()
+    x0 = v["x0"]
+    hatch = []
+    for e in msp.query('LINE[layer=="THIN"]'):
+        p, q = (e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)
+        inside = all(x0 - 0.01 <= z[0] <= x0 + vals["L"] + 0.01 and 0 <= z[1] - ay <= vals["H"] / 2 + 0.01
+                     for z in (p, q))
+        if inside and abs(q[0] - p[0]) > 1e-3 and abs(q[1] - p[1]) > 1e-3 and math.dist(p, q) > 1:
+            hatch.append(math.degrees(math.atan2(q[1] - p[1], q[0] - p[0])) % 180)
+    assert len(hatch) > 20
+    # gạch mặt cắt gốc là họ 45°; nét xiên khác hợp lệ (mũi khoan ~120°, nét gần đứng 88-92°) không xét
+    bad = [a for a in hatch if 30 < a < 85 and abs(a - 45) >= 1]
+    assert not bad, sorted(bad)
+    # vòng tròn nét đứt quanh chi tiết B: các đoạn ngắn quanh đầu chi tiết phải nằm trên 1 đường tròn
+    from pdf2cad.template import _components
+    segs = [((e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)) for e in msp.query('LINE[layer=="THIN"]')
+            if math.dist((e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)) < 1.5
+            and x0 - 15 < e.dxf.start.x < x0 + 15 and -5 < e.dxf.start.y - ay < 30]
+    fits = [_fit_circle(np.array([z for i in g for z in segs[i]])) for g in _components(segs, 0.8) if len(g) >= 8]
+    assert any(r > 5 and res < 0.01 * r for _, _, r, res in fits), fits
+    params = [e for e in msp.query('TEXT[layer=="TEXT_PARAM"]') if b[0] <= e.dxf.insert.x <= b[2]]
+    others = [e for e in msp.query("TEXT") if b[0] <= e.dxf.insert.x <= b[2] and b[1] <= e.dxf.insert.y <= b[3]]
+    for p in params:
+        assert not any(_overlap(_text_box(p), _text_box(o)) for o in others if o is not p), p.dxf.text
