@@ -355,15 +355,113 @@ class Warp:
         return (math.dist(a, b) + math.dist(c, d)) / (4 * e)
 
 
+_FEAT_CACHE: dict = {}
+
+
+def _outline_features(t: Template) -> list[tuple[float, float, float, float]]:
+    """Cạnh thấy (layer OUTLINE) trong vùng hình chiếu: (x1, r1, x2, r2), r = khoảng cách tới tâm trục.
+    Dùng để giữ hình dạng chi tiết không ghi kích thước (vát mép, góc lượn, mũi khoan)."""
+    import ezdxf
+    p = Path(t.base_dxf)
+    key = (str(p), p.stat().st_mtime if p.exists() else 0)
+    if key in _FEAT_CACHE:
+        return _FEAT_CACHE[key]
+    v = t.spec["view"]
+    b, ay = v["box"], v["axis_y"]
+    inside = lambda x, y: b[0] <= x <= b[2] and b[1] <= y <= b[3]
+    segs = []
+    try:
+        msp = ezdxf.readfile(p).modelspace()
+    except (OSError, ezdxf.DXFError):
+        msp = []
+    for e in msp:
+        if e.dxf.layer != "OUTLINE":
+            continue
+        if e.dxftype() == "LINE":
+            pts = [(e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)]
+        elif e.dxftype() == "LWPOLYLINE":
+            pts = [(q[0], q[1]) for q in e.get_points("xy")]
+        else:
+            continue
+        for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+            if not (inside(x1, y1) and inside(x2, y2)) or (y1 - ay) * (y2 - ay) < 0:
+                continue                                # cạnh cắt ngang tâm trục: không dùng
+            segs.append((x1, abs(y1 - ay), x2, abs(y2 - ay)))
+    _FEAT_CACHE[key] = segs
+    return segs
+
+
+def solve_warp(x_dims: list[dict], r_dims: list[dict], vals: dict, x0: float,
+               feats: list[tuple[float, float, float, float]] = ()):
+    """Giải chung trục dọc (x, gốc x0) và bán kính (r, gốc 0).
+
+    - Kích thước có ghi (x_dims / r_dims, toạ độ gốc; r_dims đã tính từ tâm trục): ràng buộc cứng.
+    - Cạnh xiên của hình (vát 45°, mũi khoan 118°, cung lượn chia đoạn): giữ nguyên góc, nên x và r
+      ở vùng đó phải co giãn cùng tỷ lệ -> không bị méo khi L và Φ đổi khác tỷ lệ nhau.
+    - Mỗi khoảng giữa 2 mốc (kể cả đỉnh hình): ưu tiên giữ tỷ lệ chung s; sai lệch tương đối nên
+      khoảng dài (thân) gánh phần co giãn, chi tiết nhỏ (vát, lượn) gần như giữ nguyên dạng.
+    Trả về (Px, X, Pr, R): mốc gốc và vị trí mới (X tính từ x0)."""
+    rd = lambda z: round(float(z), 4)
+
+    def val(d):
+        v = float(eval(d["expr"], {"__builtins__": {}}, dict(vals))) if isinstance(d["expr"], str) \
+            else float(d["expr"])
+        return v / 2 if d.get("half") else v
+
+    Px = sorted({rd(z) for d in x_dims for z in (d["a"], d["b"])} | {rd(x0)}
+                | {rd(z) for f in feats for z in (f[0], f[2])})
+    Pr = sorted({rd(z) for d in r_dims for z in (d["a"], d["b"])} | {0.0}
+                | {rd(z) for f in feats for z in (f[1], f[3])})
+    ix, ir = {p: i for i, p in enumerate(Px)}, {p: len(Px) + i for i, p in enumerate(Pr)}
+    n = len(Px) + len(Pr)
+    rows, rhs = [], []
+
+    def add(coef: dict, b: float, w: float):
+        r = np.zeros(n)
+        for k, c in coef.items():
+            r[k] += c * w
+        rows.append(r), rhs.append(b * w)
+
+    ratios = []
+    for dims, idx in ((x_dims, ix), (r_dims, ir)):
+        for d in dims:
+            v, a, b = val(d), rd(d["a"]), rd(d["b"])
+            add({idx[b]: 1, idx[a]: -1}, v, 1e4)
+            if abs(b - a) > 1e-6:
+                ratios.append(v / (b - a))
+    s = float(np.median(ratios)) if ratios else 1.0
+    add({ix[rd(x0)]: 1}, 0.0, 1e6)
+    add({ir[0.0]: 1}, 0.0, 1e6)
+    for P, idx in ((Px, ix), (Pr, ir)):                  # giữ tỷ lệ chung (yếu, theo tỷ lệ tương đối)
+        for p, q in zip(P, P[1:]):
+            L = q - p
+            add({idx[q]: 1 / L, idx[p]: -1 / L}, s, 1.0)
+    for x1, r1, x2, r2 in feats:                         # giữ góc cạnh xiên: ΔX·Δr - ΔR·Δx = 0
+        dx, dr = x2 - x1, r2 - r1
+        L2 = dx * dx + dr * dr
+        if abs(dx) < 1e-6 or abs(dr) < 1e-6 or L2 < 1e-12:
+            continue
+        a, b, c, e = ix[rd(x1)], ix[rd(x2)], ir[rd(r1)], ir[rd(r2)]
+        add({b: dr / L2, a: -dr / L2, e: -dx / L2, c: dx / L2}, 0.0, 30.0)
+    sol, *_ = np.linalg.lstsq(np.array(rows), np.array(rhs), rcond=None)
+    X, R = sol[:len(Px)], sol[len(Px):]
+    if (np.diff(X) <= 0).any() or (np.diff(R) <= 0).any():
+        raise ValueError("fold")
+    return np.array(Px), X, np.array(Pr), R
+
+
 def build_warp(t: Template, vals: dict) -> Warp:
     v = t.spec["view"]
-    Px, Xx = solve_breakpoints(v["x_dims"], vals, fixed_zero=v["x0"])
-    # điểm mốc x tính theo vị trí tương đối với gốc x0
-    Pr, Xr = solve_breakpoints(
-        [{**d, "a": d["a"] - v["axis_y"], "b": d["b"] - v["axis_y"]} for d in v["r_dims"]],
-        vals, fixed_zero=0.0)
-    return Warp(tuple(v["box"]), v["x0"], v["axis_y"], Px, Xx - Xx[list(Px).index(round(v["x0"], 4))],
-                Pr, Xr)
+    ay = v["axis_y"]
+    r_dims = [{**d, "a": d["a"] - ay, "b": d["b"] - ay} for d in v["r_dims"]]
+    try:
+        Px, Xx, Pr, Xr = solve_warp(v["x_dims"], r_dims, vals, v["x0"], _outline_features(t))
+    except (ValueError, np.linalg.LinAlgError, KeyError):
+        # kích thước yêu cầu quá khác bản gốc (hình gấp ngược) -> cách cũ: co giãn x, r độc lập
+        Px, Xx = solve_breakpoints(v["x_dims"], vals, fixed_zero=v["x0"])
+        Xx = Xx - Xx[list(Px).index(round(v["x0"], 4))]
+        Pr, Xr = solve_breakpoints(r_dims, vals, fixed_zero=0.0)
+    return Warp(tuple(v["box"]), v["x0"], ay, Px, Xx, Pr, Xr)
 
 
 # ----------------------------------------------------------------- vẽ lại

@@ -46,3 +46,33 @@ def test_generate_exact(t, tmp_path):
     xs = [p.x for e in msp.query('LINE[layer=="OUTLINE"]') for p in (e.dxf.start, e.dxf.end)
           if 60 < p.x < 260 and 120 < p.y < 165]
     assert abs((max(xs) - min(xs)) - 80) < 0.01
+
+
+@pytest.mark.parametrize("req", [{"No": 8, "L": 40, "S": 15}, {"No": 16, "L": 80, "S": 36, "P": 15},
+                                 {"No": 25, "L": 100}])
+def test_generate_keeps_shape(t, tmp_path, req):
+    """L và Φ co giãn khác tỷ lệ nhau: vát mép, mũi khoan, cung lượn phải giữ nguyên góc (không méo)."""
+    import math
+    v = t.spec["view"]
+    b = v["box"]
+    inside = lambda p: b[0] <= p[0] <= b[2] and b[1] <= p[1] <= b[3]
+
+    def outline(path):
+        return [((e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y))
+                for e in ezdxf.readfile(path).modelspace().query('LINE[layer=="OUTLINE"]')]
+
+    ang = lambda p, q: math.degrees(math.atan2(abs(q[1] - p[1]), abs(q[0] - p[0])))
+    base = outline(t.base_dxf)
+    vals, _, err = resolve_params(t, req)
+    assert not err
+    from pdf2cad.template import generate
+    out = outline(generate(t, vals, tmp_path / "x.dxf")["output"])
+    slanted = [i for i, (p, q) in enumerate(base) if inside(p) and inside(q)
+               and abs(q[0] - p[0]) > 1e-3 and abs(q[1] - p[1]) > 1e-3]
+    assert slanted
+    for i in slanted:
+        assert abs(ang(*out[i]) - ang(*base[i])) < 1.0, (i, ang(*base[i]), ang(*out[i]))
+    xs = [z[0] for i, s in enumerate(out) if inside(base[i][0]) and inside(base[i][1]) for z in s]
+    ys = [z[1] for i, s in enumerate(out) if inside(base[i][0]) and inside(base[i][1]) for z in s]
+    assert abs(max(xs) - min(xs) - vals["L"]) < 1e-3
+    assert abs(max(ys) - min(ys) - vals["H"]) < 1e-3
