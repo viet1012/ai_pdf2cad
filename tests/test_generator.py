@@ -38,7 +38,8 @@ def test_dsplb_generate(tmp_path):
     assert all(abs(w - x) < 1e-6 for _, w, x in g["check"])
     texts, doc = _dim_texts(g["output"])
     assert any(s.startswith("\\A0;250") and "+0.3" in s for s in texts)
-    assert any("%%c18" in s and "±0.2" in s for s in texts)          # d ≥ 14 => ±0.2
+    assert any("Φ18" in s and "±0.2" in s for s in texts)            # d ≥ 14 => ±0.2 (font chuẩn: %%c -> Φ)
+    assert not any("%%c" in s for s in texts)
     assert not doc.audit().has_errors
     v, _, err = resolve_params(t, {"D": 30, "d": 13, "L": 100})
     assert err                                                        # d=13 không có với D=30

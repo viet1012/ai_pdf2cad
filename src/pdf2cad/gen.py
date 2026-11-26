@@ -3,7 +3,8 @@
 Dùng cho mẫu "kind": "generator" — khi bản gốc chỉ là ảnh scan (không dựng lại hình từ ảnh được),
 tool vẽ lại sạch: hình chiếu đứng + cạnh, kích thước là đối tượng DIMENSION thật (sửa được trong CAD),
 dung sai, khung GD&T, ký hiệu nhám, ghi chú, khung tên. Hình học vẽ đúng kích thước thật (model 1:1);
-khung giấy A4 được phóng theo tỷ lệ in 1:k chọn tự động cho vừa khổ.
+khung bản vẽ chuẩn SPC (sheet.py, mặc định A4H-SPC; template.json "drawing.sheet" để đổi) được phóng
+theo tỷ lệ in 1:k chọn tự động để hình lọt vùng trống. Chữ dùng font chuẩn (cadstd.py).
 """
 from __future__ import annotations
 
@@ -12,11 +13,12 @@ from pathlib import Path
 
 import ezdxf
 
+from . import cadstd, sheet
 from .dxf_writer import DXF_VERSION
 from .layers import LAYER_DEFS
 from .template import Template, _fmt
 
-TEXT_STYLE = "PDF2CAD"
+TEXT_STYLE = cadstd.STYLE
 SCALES = [0.5, 1, 2, 2.5, 4, 5, 10, 20]          # 1:k  (0.5 = 2:1)
 
 
@@ -42,14 +44,50 @@ def _scale_txt(k: float) -> str:
     return "2:1" if k == 0.5 else f"1:{_fmt(k)}"
 
 
+def new_doc(k: float = 1.0, extra_layers: dict | None = None):
+    """Bản vẽ trắng theo chuẩn: đơn vị mm, layer, linetype, text style font chuẩn, LTSCALE = k."""
+    doc = ezdxf.new(DXF_VERSION, setup=True)
+    doc.units = ezdxf.units.MM
+    doc.header["$MEASUREMENT"] = 1
+    for name, (aci, lt) in {**LAYER_DEFS, "DIM": (3, "Continuous"), "TEXT": (7, "Continuous"),
+                            **(extra_layers or {})}.items():
+        if name not in doc.layers:
+            doc.layers.add(name, color=aci, linetype=lt if lt in doc.linetypes else "Continuous")
+    if "HIDDEN" not in doc.linetypes:
+        doc.linetypes.add("HIDDEN", pattern=[9.525, 6.35, -3.175], description="Hidden __ __ __")
+        doc.layers.get("HIDDEN").dxf.linetype = "HIDDEN"
+    cadstd.setup_styles(doc)
+    doc.header["$LTSCALE"] = k
+    return doc
+
+
+def _date(s) -> str:
+    """Ngày theo khung chuẩn: YYYY/MM/DD."""
+    return str(s or "").replace("-", "/")
+
+
+def title_values(dr: dict, k: float, **kw) -> dict:
+    """Giá trị điền khung tên chuẩn từ mục "drawing" của template.json."""
+    v = {"title": [t for t in (dr.get("title1"), dr.get("title2"), dr.get("title3")) if t],
+         "material": dr.get("material"), "scale": _scale_txt(k), "date": _date(dr.get("date")),
+         "drawing_no": dr.get("drawing_no"), "notes": dr.get("notes"), "roughness": dr.get("roughness")}
+    for key in ("heat_treatment", "hardness", "surface_treatment", "remarks", "design", "drawn", "check",
+                "approved", "quantity", "parts_name"):
+        if dr.get(key):
+            v[key] = dr[key]
+    v.update({a: b for a, b in kw.items() if b is not None})
+    return v
+
+
 class _Sheet:
     def __init__(self, doc, k: float):
         self.doc, self.msp, self.k = doc, doc.modelspace(), k
 
     def text(self, s, x, y, h=2.5, layer="TEXT", align="LEFT", rot=0.0, width=1.0):
         from ezdxf.enums import TextEntityAlignment as A
+        s, style = cadstd.style_for(s)
         t = self.msp.add_text(s, height=h * self.k, rotation=rot,
-                              dxfattribs={"layer": layer, "style": TEXT_STYLE, "width": width})
+                              dxfattribs={"layer": layer, "style": style, "width": width})
         t.set_placement((x, y), align={"LEFT": A.LEFT, "CENTER": A.MIDDLE_CENTER,
                                        "RIGHT": A.RIGHT, "BL": A.BOTTOM_LEFT,
                                        "MC": A.MIDDLE_CENTER, "ML": A.MIDDLE_LEFT}[align])
@@ -140,7 +178,7 @@ def _dim(sh: _Sheet, p1, p2, base, angle, text="<>", tol=None):
     ov = {"dimscale": k, "dimlfac": 1.0, "dimtxt": 3.0, "dimasz": 2.5, "dimexe": 1.5, "dimexo": 1.0,
           "dimgap": 0.8, "dimtxsty": TEXT_STYLE, "dimdec": 3, "dimzin": 8, "dimtad": 1,
           "dimclrd": 0, "dimclre": 0}
-    d = sh.msp.add_linear_dim(base=base, p1=p1, p2=p2, angle=angle, text=text,
+    d = sh.msp.add_linear_dim(base=base, p1=p1, p2=p2, angle=angle, text=cadstd.dia(text),
                               dimstyle="EZDXF", override=ov, dxfattribs={"layer": "DIM"})
     if tol is not None:
         up, low = tol
@@ -160,66 +198,48 @@ def generate_family(t: Template, vals: dict, out: str | Path) -> dict:
     bc = float(g.get("bore_chamfer", 0.0)) if d else 0.0
     R, r = D / 2, d / 2
 
-    # tỷ lệ in: hình chiếu đứng + cạnh + chỗ ghi kích thước phải vừa vùng vẽ ~ 230 x 95 mm giấy
     Dmax = max(D, float(vals[g["head"]["D"]])) if g.get("head") and g["head"].get("D") in vals else D
-    need_w, need_h = L + Dmax + 70, Dmax + 60
-    k = next((s for s in SCALES if need_w / s <= 245 and need_h / s <= 100), SCALES[-1])
+    Dside = Dmax
 
-    doc = ezdxf.new(DXF_VERSION, setup=True)
-    doc.units = ezdxf.units.MM
-    doc.header["$MEASUREMENT"] = 1
-    for name, (aci, lt) in {**LAYER_DEFS, "DIM": (3, "Continuous"), "FRAME": (7, "Continuous"),
-                            "TEXT": (7, "Continuous"), "TEXT_PARAM": (6, "Continuous")}.items():
-        if name not in doc.layers:
-            doc.layers.add(name, color=aci, linetype=lt if lt in doc.linetypes else "Continuous")
-    if "HIDDEN" not in doc.linetypes:
-        doc.linetypes.add("HIDDEN", pattern=[9.525, 6.35, -3.175], description="Hidden __ __ __")
-        doc.layers.get("HIDDEN").dxf.linetype = "HIDDEN"
-    doc.styles.add(TEXT_STYLE, font="arial.ttf")
-    doc.header["$LTSCALE"] = k
-    sh = _Sheet(doc, k)
-    m = sh.msp
-
-    # ---- khung giấy A4 ngang (phóng k lần) + khung tên
-    W, H = 297 * k, 210 * k
-    sh.rect(0, 0, W, H, "FRAME")
-    sh.rect(10 * k, 10 * k, W - 10 * k, H - 10 * k, "OUTLINE")
-    tx0, ty0 = W - 10 * k - 150 * k, 10 * k
-    rows = [("Parts Name", vals.get("_parts_name", ""), "Material", dr.get("material", "")),
-            ("Drawing Title", dr.get("title1", ""), "Scale", _scale_txt(k)),
-            ("", dr.get("title2", ""), "Date", dr.get("date", "")),
-            ("Drawing Number", vals.get("_drawing_no", dr.get("drawing_no", "")), "Projection",
-             dr.get("projection", "1st angle"))]
-    rh = 9 * k
-    for i, (a, av, b, bv) in enumerate(rows):
-        y = ty0 + (len(rows) - 1 - i) * rh
-        sh.rect(tx0, y, tx0 + 150 * k, y + rh, "OUTLINE")
-        sh.line((tx0 + 100 * k, y), (tx0 + 100 * k, y + rh), "OUTLINE")
-        if a:
-            sh.text(a, tx0 + 1.5 * k, y + rh - 3 * k, 2.0)
-        sh.text(av, tx0 + 50 * k, y + 3.2 * k, 3.2, align="MC", width=0.9)
-        sh.text(b, tx0 + 101.5 * k, y + rh - 3 * k, 2.0)
-        sh.text(bv, tx0 + 125 * k, y + 3.2 * k, 3.2, align="MC", width=0.9)
-    sh.rect(tx0, ty0 + 4 * rh, tx0 + 150 * k, ty0 + 4 * rh + 8 * k, "OUTLINE")
-    sh.text(dr.get("company", ""), tx0 + 75 * k, ty0 + 4 * rh + 4 * k, 3.5, align="MC")
-
-    # ---- ghi chú + bảng tham số của bản vẽ này
-    ny = ty0 + 4 * rh + 14 * k
-    for i, note in enumerate(reversed(dr.get("notes", []))):
-        sh.text("• " + note, tx0, ny + i * 5 * k, 2.6, width=0.9)
+    # ---- khung chuẩn + tỷ lệ in: hình chiếu đứng + cạnh + chỗ ghi kích thước (mm giấy) lọt vùng trống
+    shj = sheet.load(dr.get("sheet", sheet.DEFAULT))
     pk = [p for p in t.spec["params_show"] if p in vals]
     ptxt = "  ".join(f"{p}={_fmt(vals[p]) if isinstance(vals[p], float) else vals[p]}" for p in pk)
-    sh.text("PARAMETERS: " + ptxt, 15 * k, 15 * k, 3.0, layer="TEXT_PARAM")
-    if vals.get("_info"):
-        sh.text(vals["_info"], 15 * k, 21 * k, 3.0, layer="TEXT_PARAM")
-    if dr.get("roughness"):
-        _roughness(sh, 30 * k, H - 32 * k, dr["roughness"])
+    extra_lines = ["PARAMETERS: " + ptxt] + ([vals["_info"]] if vals.get("_info") else [])
+    notes = sheet.notes_list(shj, dr.get("notes"))
+    # chỗ ghi kích thước / GD&T quanh hình (mm giấy, tính từ mép hình chiếu) — theo vị trí vẽ bên dưới
+    gdt = dr.get("gdt", [])
+    left = 52.0 if any(f.get("at") in ("bore", "left_face") for f in gdt) else 18.0
+    below = 22.0                                                    # kích thước L: R + 14 + chữ
+    for f in gdt:
+        if f.get("at") == "left_face":
+            below = max(below, 32.0 if f.get("note") else 28.0)
+        elif f.get("at") != "bore":
+            below = max(below, 32.0 + 5.0 * int(f.get("stack", 0)))
+    below = max([below] + [28.0 + 5.0 * i for i, _ in enumerate(dr.get("view_notes", []))])
+    above = 15.0
+    k, box = sheet.fit(shj, L + Dside, Dmax, SCALES, extra=(left + 30 + 8, below + above),
+                       note_lines=notes + extra_lines)
+
+    doc = new_doc(k, {"TEXT_PARAM": (6, "Continuous")})
+    sh = _Sheet(doc, k)
+    m = sh.msp
+    sheet.draw(doc, k, title_values(dr, k, parts_name=vals.get("_parts_name"),
+                                    drawing_no=vals.get("_drawing_no")), name=shj["name"])
+    ns = shj["slots"].get("notes")
+    if ns:                                       # tham số bản vẽ này: ngay trên ghi chú chung
+        for i, line in enumerate(reversed(extra_lines)):
+            sh.text(line, ns["x"] * k, (ns["y"] + (len(notes) + i) * ns["gap"]) * k, ns["h"],
+                    layer="TEXT_PARAM")
+    else:
+        for i, line in enumerate(reversed(extra_lines)):
+            sh.text(line, box[0] * k, (box[1] + i * 5) * k, 3.0, layer="TEXT_PARAM")
+    if dr.get("roughness") and "roughness" not in shj["slots"]:
+        _roughness(sh, (box[0] + 20) * k, (box[3] - 12) * k, dr["roughness"])
 
     # ---- hình chiếu đứng (trục nằm ngang) + hình chiếu cạnh
-    Dside = max(D, float(vals[g["head"]["D"]])) if g.get("head") and g["head"].get("D") in vals else D
-    total = L + 30 * k + Dside
-    fx = 15 * k + max((260 * k - total) / 2, 25 * k)
-    cy = 125 * k
+    fx = box[0] * k + left * k
+    cy = box[1] * k + below * k + Dmax / 2
     sx = fx + L + 30 * k + Dside / 2
 
     head = g.get("head")

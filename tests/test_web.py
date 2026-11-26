@@ -33,6 +33,11 @@ def test_index_and_health(client):
     assert h["ok"] and "version" in h
 
 
+def test_std_font_served(client):
+    r = client.get("/api/font/FG-SPC.ttf")
+    assert r.status_code == 200 and r.headers["content-type"] == "font/ttf" and len(r.content) > 10000
+
+
 def test_convert_roundtrip(client, sample_pdf, tmp_path):
     with open(sample_pdf, "rb") as f:
         r = client.post("/api/jobs", files=[("files", ("bản vẽ.pdf", f, "application/pdf"))],

@@ -124,7 +124,8 @@ Web, app desktop và dòng lệnh nhận trực tiếp `.tif/.tiff/.png/.jpg/.bm
 
 Khi bản gốc chỉ là ảnh scan, mẫu `"kind": "generator"` **vẽ mới hoàn toàn** bản vẽ sạch từ bộ tham số
 (`src/pdf2cad/gen.py`): hình chiếu đứng + cạnh, **DIMENSION thật** (sửa được trong CAD) kèm dung sai,
-khung GD&T, chuẩn A, ký hiệu nhám, vát mép, ghi chú, khung tên; tỷ lệ in 1:k tự chọn cho vừa A4.
+khung GD&T, chuẩn A, ký hiệu nhám, vát mép, ghi chú, **khung bản vẽ chuẩn SPC** (mục dưới); tỷ lệ in 1:k
+tự chọn nhỏ nhất để hình + chỗ ghi kích thước lọt vùng trống của khung.
 
 | Mẫu | Nguồn | Khoá bảng | Ví dụ chat |
 |---|---|---|---|
@@ -135,6 +136,45 @@ khung GD&T, chuẩn A, ký hiệu nhám, vát mép, ghi chú, khung tên; tỷ l
   **Giả định**: "a~b (10mm increments)" = a rồi các bội số 10 đến b (vd 15~60 → 15, 20, 30…60). Cần xác nhận.
 - Dung sai theo quy tắc: SPLB-B L>200 ⇒ +1.2/+0.6; DSPLB-B d<14 ⇒ ±0.1, d≥14 ⇒ ±0.2.
 - Bot hỏi lần lượt từng khoá (D rồi d) với giá trị hợp lệ; đổi D thì d không còn hợp lệ sẽ bị bỏ và hỏi lại.
+
+## Chuẩn bản vẽ công ty: font + khung (docs/Font.zip, docs/template.zip)
+
+**Font** (`src/pdf2cad/cadstd.py`) — áp cho mọi DXF xuất ra (chuyển PDF/scan, vẽ lại từ mẫu, vẽ mới, chi tiết tiện):
+
+| Style DXF | Font | Dùng cho |
+|---|---|---|
+| `SPC` (mặc định, cả DIMENSION) | `FG-SPC.ttf` (FG教科書体NT-M + tiếng Việt) | mọi chữ |
+| `SPC_J` | `FGCNTKYM.TTC` › FG教科書体NT-M | chữ có ký tự toàn khổ (`～`, `･`…) mà không có tiếng Việt |
+| `SPC_P` | `FGCNTKYM.TTC` › FGP教科書体NT-M | chữ khung tên mẫu ghi bằng FGP (tên công ty, bảng sửa đổi) |
+
+- Chiều cao TEXT = chiều cao chữ hoa = 0.73 × cỡ chữ TopSolid (cỡ 3.5 → TEXT 2.555).
+- Máy mở DXF phải **cài 2 font** trong `docs/Font.zip`, nếu không CAD sẽ thay font khác. `FG-SPC.ttf` có kèm
+  trong gói (`src/pdf2cad/fonts/`) để đo bề rộng chữ OCR và để web/app xem trước đúng font.
+- **Ký hiệu đường kính ghi bằng chữ `Φ`**: cả 2 font chuẩn đều không có `Ø`/`∅` (CAD vẽ `%%c` bằng `∅` nên sẽ
+  mất ký hiệu), FG-SPC có sẵn `Φ` hẹp cho việc này. Mọi `%%c` / `Ø` / `∅` đổi thành `Φ` khi ghi DXF (cả chữ đè
+  của DIMENSION: `Φ<>`). Bên trong chương trình (OCR, mẫu `template.json`) vẫn dùng mã `%%c`; khi đọc lại DXF
+  đã xuất (dạy bot, vẽ lại từ `base.dxf`) `Φ` được đổi ngược về `%%c` để so khớp.
+- Chữ FG-SPC không có (`～ ･ ｍ`) được đổi sang ký tự tương đương (`~ · m`) khi chữ có tiếng Việt.
+- Bản vẽ cũ dựng từ PDF (`templates/*/base.dxf`, font Arial) được đổi sang font chuẩn khi vẽ lại, giữ nguyên
+  chiều dài chữ (hệ số rộng tính lại).
+
+**Khung bản vẽ** (`src/pdf2cad/sheet.py`, dữ liệu `src/pdf2cad/sheets/*.json`): đọc trực tiếp 7 mẫu
+TopSolid'Draft (`A4H-SPC`, `A4V-SPC`, `A4HA3-SPC`, `A4VA3-SPC`, `A4-ASSYA1..3-SPC`) bằng `tools/dft_import.py`:
+giải nén `TOPCOMPRESS`, lấy hình biểu diễn (đường, cung, vùng tô logo, chữ + font + canh lề), bỏ phần tử ẩn,
+đường dựng, lớp `※General Tolerance f` (đang tắt trong mẫu) và bản sao nằm ngoài tờ giấy.
+- Vẽ mới dùng `A4H-SPC` (đổi bằng `"drawing": {"sheet": "A4V-SPC"}` trong `template.json`).
+- Ô khung tên tự nhận theo nhãn: giá trị nằm ở ô ngay dưới nhãn (`Parts Name`, `Drawing Title`, `Material`,
+  `Heat Treatment`, `Hardness`, `Surface Treatment`, `Remarks`, `Design`, `Drawn`, `Check`, `Approved`,
+  `Quantity`, `Scale`, `Date`, `Drawing Number`). Giá trị canh giữa ô, giữ cỡ chữ mẫu, tự co hệ số rộng nếu dài.
+  Khoá trong `"drawing"`: `title1/title2`, `material`, `heat_treatment`, `hardness`, `surface_treatment`, `remarks`,
+  `design`, `drawn`, `check`, `approved`, `quantity`, `date` (in `YYYY/MM/DD`).
+- Ghi chú chung: `"notes"` thay 2 dòng mặc định của khung (`BREAK SHARP EDGES… C0.1～0.2`, `<JIS B 0405-m>`);
+  không khai báo thì giữ mặc định. Ký hiệu nhám chung lấy `"roughness"` (mặc định `3.2a`).
+- Hình được đặt vào vùng trống (tránh khung tên, bảng dung sai chung, bảng sửa đổi, ghi chú, ký hiệu nhám).
+- Cập nhật khi công ty đổi mẫu: `python tools/dft_import.py docs/template.zip src/pdf2cad/sheets`
+  (`--raw` xuất bản thô để dò). **Giả định khi đọc .dft** (định dạng TopSolid không có tài liệu): byte cờ = 1 là phần
+  tử ẩn; độ dày nét in suy ra theo loại (viền khung/viền bảng 0.5, đường chia 0.25, nét mảnh 0.18) — cần đối chiếu
+  bản in TopSolid.
 
 ## Tự học bản vẽ mới ("Dạy bot")
 
@@ -234,7 +274,7 @@ pdf2cad convert drawing.pdf                    # --ocr auto (mặc định) | on
 
 | Layer | Nội dung |
 |---|---|
-| `TEXT_OCR` | Chữ OCR (TEXT, font Arial, sửa được). Φ → `%%c`, ± → `%%p` |
+| `TEXT_OCR` | Chữ OCR (TEXT, font chuẩn FG-SPC, sửa được). Ký hiệu đường kính ghi `Φ`, ± → `%%p` |
 | `TEXT_CHECK` (đỏ) | Chữ OCR độ tin cậy thấp — cần soát lại |
 | `TEXT_GLYPH` (tắt sẵn) | Nét chữ gốc đã được thay bằng TEXT. Bật lên để đối chiếu |
 | `FILL` | Hình tô đặc còn lại (mũi tên, ký hiệu) và chữ OCR không đọc được |
@@ -290,6 +330,8 @@ pipeline.py: song song theo trang (ProcessPoolExecutor), lỗi 1 trang không d�
 | `vector_extract.py` | Đọc lệnh vẽ PDF, lật trục Y, trích text kèm góc xoay |
 | `ocr.py` | OCR chữ bị outline → TEXT, gom nét chữ gốc sang `TEXT_GLYPH` |
 | `raster.py` | Vector hoá ảnh scan (thử nghiệm) |
+| `cadstd.py` | Font chuẩn công ty: text style SPC / SPC_J / SPC_P, đổi ký tự, đo bề rộng chữ |
+| `sheet.py` | Khung bản vẽ chuẩn SPC (từ mẫu TopSolid): vẽ khung, điền khung tên, tìm vùng trống đặt hình |
 | `bench.py` | Benchmark render & trích xuất |
 
 ## Độ chính xác hiện tại (bản vẽ mẫu, `tools/make_sample_pdf.py`)
@@ -305,7 +347,7 @@ Tốc độ (trang A3/A4 mẫu): trích vector ~3 ms/trang, render 300 dpi ~80 m
 
 - Đường kích thước được xuất dưới dạng LINE + TEXT, chưa thành đối tượng DIMENSION.
 - Bản scan: đã OCR chữ; chưa nhận nét đứt/đường tâm, dấu mộc/chữ ký tay vẫn thành nét.
-- Text: font PDF không được giữ (dùng Arial), chiều cao chữ ước lượng = 0.7 × font size.
+- Text: font PDF không được giữ (dùng font chuẩn FG-SPC), chiều cao chữ ước lượng = 0.7 × font size.
 - OCR: ký hiệu ℓ (chữ l viết tay) đọc thành "l"/"I"; ký hiệu GD&T giữ dạng nét (HATCH), chưa thành
   ký tự; ghi chú nhiều dòng có thể bị tách TEXT ở đầu dòng ("*." | "16≤No..."). Luôn soát lại layer `TEXT_CHECK`. Chưa OCR cho trang scan.
 - Bản vẽ có nhiều khung nhìn tỷ lệ khác nhau trên cùng trang: hiện áp 1 tỷ lệ cho cả trang.

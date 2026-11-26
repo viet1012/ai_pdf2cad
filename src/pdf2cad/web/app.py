@@ -283,6 +283,8 @@ def dxf_preview(path: Path, max_entities: int = 60000) -> dict:
     import math as _m
 
     import ezdxf
+
+    from .. import cadstd
     doc = ezdxf.readfile(path)
     hidden = {l.dxf.name for l in doc.layers if l.is_off() or l.is_frozen()}
     layers: dict[str, dict] = {}
@@ -291,7 +293,7 @@ def dxf_preview(path: Path, max_entities: int = 60000) -> dict:
 
     def text_at(x, y, h, rot, wf, txt, hfrac, vfrac):
         """hfrac/vfrac: điểm neo nằm ở bao nhiêu phần bề rộng/cao chữ -> quy về chân trái."""
-        w = 0.6 * h * len(txt) * wf
+        w = cadstd.estimate_width(txt, h, wf)              # font chuẩn FG-SPC
         a = _m.radians(rot)
         dx, dy = -hfrac * w, -vfrac * h
         return [r(x + dx * _m.cos(a) - dy * _m.sin(a)), r(y + dx * _m.sin(a) + dy * _m.cos(a)),
@@ -544,6 +546,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             access_log(request, "mở trang web")
         return resp
+
+    @app.get("/api/font/FG-SPC.ttf", include_in_schema=False)
+    def std_font():
+        """Font chuẩn (FG-SPC) cho khung xem trước DXF trên trình duyệt."""
+        from .. import cadstd
+        return FileResponse(cadstd.FONT_DIR / cadstd.FONT_FILE, media_type="font/ttf",
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     @app.post("/api/log", status_code=204)
     async def client_log(request: Request):

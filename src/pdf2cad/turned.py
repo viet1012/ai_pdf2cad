@@ -214,48 +214,37 @@ def steps_profile(steps: list[dict]) -> dict:
 
 def draw_turned(steps: list[dict], out: str | Path, title: str = "TURNED PART", note: str = "") -> Path:
     """Vẽ bản DXF 2D chi tiết tròn xoay từ các đoạn [{len, D, d}]: hình chiếu đứng (nửa trên cắt, có lỗ
-    nét khuất), hình chiếu cạnh, kích thước tổng + từng đoạn + từng Φ, khung tên A4. Model 1:1 (mm)."""
-    import ezdxf
+    nét khuất), hình chiếu cạnh, kích thước tổng + từng đoạn + từng Φ, khung chuẩn A4H-SPC. Model 1:1 (mm)."""
+    import datetime
 
-    from .dxf_writer import DXF_VERSION
-    from .gen import SCALES, TEXT_STYLE, _dim, _scale_txt, _Sheet
-    from .layers import LAYER_DEFS
+    from . import sheet
+    from .gen import SCALES, _dim, _Sheet, new_doc, title_values
     from .template import _fmt
     prof = steps_profile(steps)
     st = prof["steps"]
     if not st:
         raise ValueError("Không có đoạn hợp lệ (chiều dài và Φ phải > 0)")
     L, Dm = prof["L"], prof["Dmax"]
-    need_w, need_h = L + Dm + 80, Dm + 70
-    k = next((s for s in SCALES if need_w / s <= 245 and need_h / s <= 105), SCALES[-1])
+    shj = sheet.load(sheet.DEFAULT)
+    extra_lines = [f"L={_fmt(L)}   %%c{_fmt(Dm)}"] + ([note] if note else [])
+    notes = sheet.notes_list(shj, None)
+    left, below, above = 10.0, 24.0, 16.0
+    k, box = sheet.fit(shj, L + Dm, Dm, SCALES, extra=(left + 30 + 6, below + above),
+                       note_lines=notes + extra_lines)
 
-    doc = ezdxf.new(DXF_VERSION, setup=True)
-    doc.units = ezdxf.units.MM
-    doc.header["$MEASUREMENT"] = 1
-    for name, (aci, lt) in {**LAYER_DEFS, "DIM": (3, "Continuous"), "FRAME": (7, "Continuous")}.items():
-        if name not in doc.layers:
-            doc.layers.add(name, color=aci, linetype=lt if lt in doc.linetypes else "Continuous")
-    if "HIDDEN" not in doc.linetypes:
-        doc.linetypes.add("HIDDEN", pattern=[9.525, 6.35, -3.175], description="Hidden __ __ __")
-        doc.layers.get("HIDDEN").dxf.linetype = "HIDDEN"
-    if TEXT_STYLE not in doc.styles:
-        doc.styles.add(TEXT_STYLE, font="arial.ttf")
-    doc.header["$LTSCALE"] = k
+    doc = new_doc(k, {"TEXT_PARAM": (6, "Continuous")})
     sh = _Sheet(doc, k)
     m = sh.msp
-    W, H = 297 * k, 210 * k
-    sh.rect(0, 0, W, H, "FRAME")
-    sh.rect(10 * k, 10 * k, W - 10 * k, H - 10 * k, "OUTLINE")
-    tx0, ty0 = W - 10 * k - 120 * k, 10 * k
-    sh.rect(tx0, ty0, W - 10 * k, ty0 + 18 * k, "OUTLINE")
-    sh.line((tx0, ty0 + 9 * k), (W - 10 * k, ty0 + 9 * k), "OUTLINE")
-    sh.text(title, tx0 + 60 * k, ty0 + 13.5 * k, 3.5, align="MC", width=0.9)
-    sh.text(f"Scale {_scale_txt(k)}   L={_fmt(L)}   %%c{_fmt(Dm)}", tx0 + 60 * k, ty0 + 4.5 * k, 2.8, align="MC")
-    if note:
-        sh.text(note, 15 * k, 15 * k, 2.6, layer="TEXT_PARAM", width=0.9)
+    sheet.draw(doc, k, title_values({"title1": title, "date": datetime.date.today().isoformat()}, k),
+               name=shj["name"])
+    ns = shj["slots"].get("notes")
+    if ns:
+        for i, line in enumerate(reversed(extra_lines)):
+            sh.text(line, ns["x"] * k, (ns["y"] + (len(notes) + i) * ns["gap"]) * k, ns["h"],
+                    layer="TEXT_PARAM", width=0.9)
 
-    fx = 20 * k + max((240 * k - (L + 30 * k + Dm)) / 2, 25 * k)
-    cy = 120 * k
+    fx = box[0] * k + left * k
+    cy = box[1] * k + below * k + Dm / 2
     # hình chiếu đứng: biên ngoài (trên + dưới), bậc, lỗ nét khuất
     up = [(fx + x, cy + r) for x, r in prof["outer"]]
     dn = [(fx + x, cy - r) for x, r in reversed(prof["outer"])]

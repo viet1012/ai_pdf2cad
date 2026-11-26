@@ -16,6 +16,7 @@ from pathlib import Path
 
 import ezdxf
 
+from .cadstd import undia
 from .template import expand_values
 
 PARAM_NAMES = {"D", "d", "H", "T", "L", "P", "S", "C", "M", "Y", "K", "W", "B"}
@@ -39,7 +40,7 @@ def _texts(msp) -> list[_T]:
         r = t.dxf.rotation % 360
         if 8 < r < 352:                               # chữ ngang (cho phép lệch scan vài độ)
             continue
-        txt = t.dxf.text.strip()
+        txt = undia(t.dxf.text).strip()          # DXF ghi Φ, bảng/mẫu dùng mã %%c
         if txt:
             out.append(_T(t.dxf.insert.x, t.dxf.insert.y, t.dxf.height, txt))
     return out

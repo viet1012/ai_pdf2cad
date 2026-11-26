@@ -40,7 +40,8 @@ def test_generate_exact(t, tmp_path):
         assert abs(want - got) < 1e-3, name
     msp = ezdxf.readfile(r["output"]).modelspace()
     texts = {e.dxf.text for e in msp.query("TEXT")}
-    assert {"80", "36%%p0.2", "(37)", "%%c19", "%%c15", "M5"} <= texts
+    assert {"80", "36%%p0.2", "(37)", "Φ19", "Φ15", "M5"} <= texts      # font chuẩn: %%c -> Φ
+    assert not any("%%c" in s for s in texts)
     assert "DSJC-B No.16-L80" in texts
     # chiều dài tổng đo trên đường bao ngoài = 80
     xs = [p.x for e in msp.query('LINE[layer=="OUTLINE"]') for p in (e.dxf.start, e.dxf.end)

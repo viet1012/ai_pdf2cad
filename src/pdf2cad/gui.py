@@ -34,6 +34,23 @@ APP = "pdf2cad"
 COLS = ["File", "Trang", "Loại", "Tỷ lệ", "Nguồn tỷ lệ", "Đối tượng", "Thời gian", "Kết quả"]
 
 
+_STD_FAMILY: list[str] = []
+
+
+def _std_font(size: float = 10) -> QFont:
+    """Font chuẩn FG-SPC (kèm trong gói) cho khung xem trước DXF; không nạp được thì Arial."""
+    if not _STD_FAMILY:
+        from PySide6.QtGui import QFontDatabase
+
+        from .cadstd import FONT_DIR, FONT_FILE
+        fid = QFontDatabase.addApplicationFont(str(FONT_DIR / FONT_FILE))
+        fams = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
+        _STD_FAMILY.append(fams[0] if fams else "Arial")
+    f = QFont(_STD_FAMILY[0])
+    f.setPointSizeF(size)
+    return f
+
+
 def _collect_pdfs(paths) -> list[Path]:
     """Nhận file hoặc thư mục (quét đệ quy *.pdf, *.tif, *.png, *.jpg...)."""
     out: list[Path] = []
@@ -195,7 +212,7 @@ class DxfPreview(ZoomView):
                 w = 0.6 * h * len(txt)
                 x0 = ins.x - ((ap - 1) % 3) * 0.5 * w
                 y0 = ins.y - {0: 1, 1: 0.5, 2: 0}[(ap - 1) // 3] * h
-                item = self.scene().addText(txt, QFont("Arial", 10))
+                item = self.scene().addText(txt, _std_font(10))
                 item.setDefaultTextColor(QColor(self.LAYER_COLORS.get("TEXT_OCR")))
                 item.setScale(h / 10 * 1.4)
                 item.setPos(x0, -y0 - h * 1.6)
@@ -225,8 +242,7 @@ class DxfPreview(ZoomView):
                         pp.closeSubpath()
             elif t == "TEXT":
                 h = max(e.dxf.height, 0.1)
-                f = QFont("Arial")
-                f.setPointSizeF(10)
+                f = _std_font(10)
                 ins = e.dxf.insert
                 item = self.scene().addText(e.dxf.text, f)
                 item.setDefaultTextColor(QColor(self.LAYER_COLORS.get(e.dxf.layer,

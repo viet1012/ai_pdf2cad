@@ -35,7 +35,7 @@ pdf2cad-gui = "pdf2cad.gui:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pdf2cad = ["web/static/*"]
+pdf2cad = ["web/static/*", "sheets/*.json", "fonts/*.ttf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

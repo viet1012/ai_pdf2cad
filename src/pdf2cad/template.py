@@ -818,8 +818,12 @@ def generate(t: Template, vals: dict, out: str | Path) -> dict:
     import ezdxf
 
     warp = build_warp(t, vals)
+    from . import cadstd
     doc = ezdxf.readfile(t.base_dxf)
     msp = doc.modelspace()
+    for e in msp.query("TEXT"):          # base.dxf xuất bằng bản mới ghi Φ; nhãn trong mẫu dùng mã %%c
+        if cadstd.DIA in e.dxf.text:
+            e.dxf.text = cadstd.undia(e.dxf.text)
     W = warp
     feats = _outline_features(t)
     ext = _part_extent(feats)
@@ -888,7 +892,8 @@ def generate(t: Template, vals: dict, out: str | Path) -> dict:
                      if not t.params.get(k, {}).get("derived"))
     nx, ny = t.spec.get("param_note_at", [warp.box[0], warp.box[1] - 4])
     msp.add_text(f"PARAMETERS: {note}", height=2.5,
-                 dxfattribs={"insert": (nx, ny), "layer": "TEXT_PARAM", "style": "PDF2CAD"})
+                 dxfattribs={"insert": (nx, ny), "layer": "TEXT_PARAM"})
+    cadstd.apply_standard(doc)          # mọi chữ -> font chuẩn, %%c -> Φ
 
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)

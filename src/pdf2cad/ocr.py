@@ -254,12 +254,11 @@ def ocr_image(img_bgr: np.ndarray, min_score: float = 0.5) -> list[OcrWord]:
 
 
 def _text_width(text: str, cap_height: float) -> float | None:
-    """Ước lượng chiều dài chữ khi hiển thị bằng Arial (đơn vị như cap_height)."""
+    """Chiều dài chữ khi hiển thị bằng font chuẩn FG-SPC (đơn vị như cap_height) — để tính hệ số rộng
+    cho TEXT chồng khít nét chữ gốc."""
     try:
-        from ezdxf.fonts import fonts
-        f = fonts.make_font("arial.ttf", cap_height)
-        t = text.replace("%%c", "Ø").replace("%%p", "±").replace("%%d", "°")
-        return float(f.text_width(t))
+        from . import cadstd
+        return cadstd.text_width(text, cap_height)
     except Exception:
         return None
 

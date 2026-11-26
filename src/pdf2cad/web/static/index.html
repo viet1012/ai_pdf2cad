@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pdf2cad — PDF → DXF</title>
 <style>
+@font-face{font-family:"FG-SPC";src:url("api/font/FG-SPC.ttf") format("truetype");font-display:swap}
 :root{--bg:#f5f6f8;--panel:#fff;--text:#1f2328;--muted:#656d76;--line:#d0d7de;--accent:#1a73e8;
 --accent-soft:#e8f0fe;--ok:#1a7f37;--warn:#9a6700;--err:#cf222e;--canvas:#ffffff}
 @media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--text:#e6edf3;--muted:#8d96a0;
@@ -751,12 +752,14 @@ function draw() {
     if (L.f && L.f.length) { ctx.beginPath(); for (const p of L.f) { ctx.moveTo(p[0][0], -p[0][1]); for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], -p[i][1]); ctx.closePath(); } ctx.fill("evenodd"); }
     for (const [x, y, h, rot, wf, t] of L.t) {
       ctx.save(); ctx.translate(x, -y); ctx.rotate(-rot * Math.PI / 180); ctx.scale(wf || 1, 1);
-      ctx.font = `${h * 1.38}px Arial, sans-serif`; ctx.textBaseline = "alphabetic"; ctx.fillText(t, 0, 0); ctx.restore();
+      ctx.font = `${h / 0.73}px "FG-SPC", Arial, sans-serif`; ctx.textBaseline = "alphabetic"; ctx.fillText(t, 0, 0); ctx.restore();
     }
   }
 }
 
 relang.push(() => { if (!scene) draw(); });
+// font chuẩn FG-SPC (chữ DXF) nạp xong thì vẽ lại khung xem trước
+if (document.fonts && document.fonts.load) document.fonts.load('10px "FG-SPC"').then(() => { if (scene) draw(); }).catch(() => {});
 
 function showImage(url, info) {
   setTab("pdf"); $("#layers").style.display = "none"; vinfo(info);

@@ -6,11 +6,12 @@ from pathlib import Path
 import ezdxf
 from ezdxf import colors
 
+from . import cadstd
 from .geometry import Arc, Circle, Line, PageGeometry, Polyline
 from .layers import LAYER_DEFS, LAYERS_OFF
 
 DXF_VERSION = "R2007"    # AutoCAD 2007 (AC1021): mở được bằng CAD 2007 trở lên, vẫn UTF-8
-TEXT_STYLE = "PDF2CAD"   # Arial: hiển thị được tiếng Việt, Φ, ±, ≤ ... (txt.shx thì không)
+TEXT_STYLE = cadstd.STYLE   # font chuẩn công ty FG-SPC (FG教科書体NT-M + tiếng Việt)
 
 
 def write_dxf(geo: PageGeometry, path: str | Path, factor: float,
@@ -31,8 +32,7 @@ def write_dxf(geo: PageGeometry, path: str | Path, factor: float,
             doc.layers.add(name, color=aci, linetype=lt)
     for name in LAYERS_OFF:
         doc.layers.get(name).off()
-    if TEXT_STYLE not in doc.styles:
-        doc.styles.add(TEXT_STYLE, font="arial.ttf")
+    cadstd.setup_styles(doc)
     msp = doc.modelspace()
 
     S = lambda p: (p[0] * factor, p[1] * factor)
@@ -63,8 +63,9 @@ def write_dxf(geo: PageGeometry, path: str | Path, factor: float,
                 msp.add_lwpolyline(pts, close=e.closed, dxfattribs=attrs(e.style))
 
     for t in geo.texts:
-        msp.add_text(t.text, height=t.height * factor, rotation=t.rotation,
-                     dxfattribs={"layer": t.style.layer or "TEXT", "style": TEXT_STYLE,
+        s, style = cadstd.style_for(t.text)
+        msp.add_text(s, height=t.height * factor, rotation=t.rotation,
+                     dxfattribs={"layer": t.style.layer or "TEXT", "style": style,
                                  "width": t.width_factor,
                                  "insert": S(t.insert)})
 
