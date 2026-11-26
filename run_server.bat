@@ -1,5 +1,5 @@
 @echo off
-rem Chay web server pdf2cad (khong can nhap gi).
+rem Chay web server pdf2cad (khong can nhap gi). Chi mo server/API, khong tu mo trinh duyet.
 rem   Cau hinh: deploy\server_config.bat (PORT mac dinh 5020, LLM, OCR...) - dung chung voi dich vu tren server.
 rem   run_server.bat               -> cong theo cau hinh, cho ca mang LAN (http://<IP-may>:<port>)
 rem   run_server.bat 9000          -> ep cong 9000
@@ -62,5 +62,5 @@ echo.
 echo Server: http://localhost:%PORT%
 if "%HOST%"=="0.0.0.0" echo Mang LAN: http://^<IP-may^>:%PORT%  (nho mo cong %PORT% tren Windows Firewall)
 echo.
-".venv\Scripts\python.exe" -m pdf2cad serve --host %HOST% --port %PORT% --open
+".venv\Scripts\python.exe" -m pdf2cad serve --host %HOST% --port %PORT%
 pause

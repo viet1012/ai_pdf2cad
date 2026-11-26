@@ -695,12 +695,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         files = sorted(out.glob("*.dxf")) if out.exists() else []
         if not files:
             raise HTTPException(404, "Chưa có file DXF")
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-            for f in files:
-                z.write(f, f.name)
         stem = Path(job.files[0]["name"]).stem if len(job.files) == 1 else "pdf2cad"
-        return StreamingResponse(iter([buf.getvalue()]), media_type="application/zip",
+        return StreamingResponse(_zip_stream(files), media_type="application/zip",
                                  headers={"Content-Disposition":
                                           f"attachment; filename*=UTF-8''{_q(stem)}_dxf.zip"})
 
@@ -982,6 +978,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return res
 
     return app
+
+
+class _ZipSink(io.RawIOBase):
+    """Đích ghi không seek được: zipfile ghi vào đây, _zip_stream lấy dần ra gửi đi."""
+
+    def __init__(self):
+        self.buf = bytearray()
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, b) -> int:
+        self.buf += b
+        return len(b)
+
+    def take(self) -> bytes:
+        out = bytes(self.buf)
+        self.buf.clear()
+        return out
+
+
+def _zip_stream(files: list[Path]):
+    """Nén từng DXF rồi gửi ngay (không gom cả zip trong RAM): client nhận byte đầu tiên sau file 1."""
+    sink = _ZipSink()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for f in files:
+            z.write(f, f.name)
+            if sink.buf:
+                yield sink.take()
+    if sink.buf:                                         # mục lục cuối file zip
+        yield sink.take()
 
 
 def _q(s: str) -> str:
